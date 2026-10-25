@@ -1,9 +1,8 @@
+
 import { NextRequest, NextResponse } from "next/server";
 import { connectDB } from "@/lib/mongodb";
 import Inquiry from "@/models/Inquiry";
 import { sendInquiryNotification } from "@/lib/mailer";
-
-export const runtime = "nodejs";
 
 const allowedServices = [
   "web-development",
@@ -26,26 +25,48 @@ const allowedTimelines = [
   "flexible",
 ];
 
-function cleanText(value: unknown, maxLength: number) {
-  if (typeof value !== "string") return "";
+function cleanText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+
   return value.trim().slice(0, maxLength);
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body: unknown = await request.json();
 
-    const name = cleanText(body.name, 100);
-    const email = cleanText(body.email, 254).toLowerCase();
-    const company = cleanText(body.company, 150);
-    const service = cleanText(body.service, 50);
-    const budget = cleanText(body.budget, 30);
-    const timeline = cleanText(body.timeline, 30);
-    const description = cleanText(body.description, 5000);
-
-    if (!name || name.length < 2) {
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body)
+    ) {
       return NextResponse.json(
-        { success: false, message: "Please enter your name." },
+        {
+          success: false,
+          message: "Invalid request body.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const data = body as Record<string, unknown>;
+
+    const name = cleanText(data.name, 100);
+    const email = cleanText(data.email, 254).toLowerCase();
+    const company = cleanText(data.company, 150);
+    const service = cleanText(data.service, 50);
+    const budget = cleanText(data.budget, 30);
+    const timeline = cleanText(data.timeline, 30);
+    const description = cleanText(data.description, 5000);
+
+    if (name.length < 2) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Please enter your name.",
+        },
         { status: 400 }
       );
     }
@@ -54,36 +75,50 @@ export async function POST(request: NextRequest) {
 
     if (!emailPattern.test(email)) {
       return NextResponse.json(
-        { success: false, message: "Please enter a valid email address." },
+        {
+          success: false,
+          message: "Please enter a valid email address.",
+        },
         { status: 400 }
       );
     }
 
     if (!allowedServices.includes(service)) {
       return NextResponse.json(
-        { success: false, message: "Please select a valid service." },
+        {
+          success: false,
+          message: "Please select a valid service.",
+        },
         { status: 400 }
       );
     }
 
     if (!allowedBudgets.includes(budget)) {
       return NextResponse.json(
-        { success: false, message: "Please select a valid budget." },
+        {
+          success: false,
+          message: "Please select a valid budget.",
+        },
         { status: 400 }
       );
     }
 
     if (!allowedTimelines.includes(timeline)) {
       return NextResponse.json(
-        { success: false, message: "Please select a valid timeline." },
+        {
+          success: false,
+          message: "Please select a valid timeline.",
+        },
         { status: 400 }
       );
     }
 
+    const rawFeatures = data.features;
+
     if (
-      !Array.isArray(body.features) ||
-      body.features.length > 30 ||
-      !body.features.every(
+      !Array.isArray(rawFeatures) ||
+      rawFeatures.length > 30 ||
+      !rawFeatures.every(
         (feature: unknown) =>
           typeof feature === "string" &&
           feature.trim().length > 0 &&
@@ -91,20 +126,24 @@ export async function POST(request: NextRequest) {
       )
     ) {
       return NextResponse.json(
-        { success: false, message: "Invalid selected features." },
+        {
+          success: false,
+          message: "Invalid selected features.",
+        },
         { status: 400 }
       );
     }
 
-    const features = [
-      ...new Set(
-        body.features.map((feature: string) => feature.trim())
-      ),
-    ];
+    // Explicit string[] typing fixes the TypeScript build error.
+    const features: string[] = Array.from(
+      new Set<string>(
+        (rawFeatures as string[]).map((feature) => feature.trim())
+      )
+    );
 
     await connectDB();
 
-    // First save the inquiry. An email failure must not lose the inquiry.
+    // Save the inquiry first so SMTP failure does not lose it.
     const inquiry = await Inquiry.create({
       name,
       email,
@@ -144,7 +183,7 @@ export async function POST(request: NextRequest) {
         { status: 201 }
       );
     } catch (emailError) {
-      // Keep the inquiry in MongoDB even if SMTP fails.
+      // The database record remains saved if email delivery fails.
       inquiry.emailStatus = "failed";
       inquiry.emailError =
         emailError instanceof Error

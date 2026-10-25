@@ -337,10 +337,12 @@ export default async function ServicePage({ params }: PageProps) {
   const service = serviceDetails[slug as ServiceSlug];
   const Icon = service.Icon;
 
-  const deliverables = service.deliverables.map(([title, description]) => ({
-    title,
-    description,
-  }));
+  const deliverables = service.deliverables.map(
+    ([title, description]) => ({
+      title,
+      description,
+    })
+  );
 
   const process = service.process.map((title) => ({
     title,
@@ -478,9 +480,7 @@ export default async function ServicePage({ params }: PageProps) {
           <Link href="/#contact">Contact</Link>
         </div>
 
-        <span className="footer-copy">
-          © {new Date().getFullYear()} ShyGrow
-        </span>
+        <span className="footer-copy">© 2026 ShyGrow</span>
       </footer>
     </main>
   );

@@ -441,9 +441,9 @@ export default function HomePage() {
           <Link href="#contact">Contact</Link>
         </div>
 
-        <span className="footer-copy">
-          © {new Date().getFullYear()} ShyGrow
-        </span>
+       <span className="footer-copy">
+  © 2026 ShyGrow
+</span>
       </footer>
     </main>
   );
