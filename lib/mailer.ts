@@ -1,4 +1,5 @@
-import nodemailer from "nodemailer";
+
+import { Resend } from "resend";
 
 type InquiryEmailData = {
   id: string;
@@ -9,12 +10,12 @@ type InquiryEmailData = {
   features: string[];
   budget: string;
   timeline: string;
-  description?: string;
-  createdAt: Date | string;
+  description: string;
+  createdAt?: Date | string;
 };
 
-function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, (character) => {
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
     const entities: Record<string, string> = {
       "&": "&amp;",
       "<": "&lt;",
@@ -23,84 +24,80 @@ function escapeHtml(value: string) {
       "'": "&#39;",
     };
 
-    return entities[character];
+    return entities[char];
   });
-}
-
-function readable(value: string) {
-  return value
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 export async function sendInquiryNotification(
   inquiry: InquiryEmailData
 ) {
-  const user = process.env.SMTP_USER;
-  const password = process.env.SMTP_APP_PASSWORD;
-  const recipient = process.env.INQUIRY_TO_EMAIL;
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.INQUIRY_TO_EMAIL;
+  const from =
+    process.env.INQUIRY_FROM_EMAIL || "onboarding@resend.dev";
 
-  if (!user || !password || !recipient) {
-    throw new Error("Email environment variables are missing");
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY is not configured.");
   }
 
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.gmail.com",
-    port: Number(process.env.SMTP_PORT || 465),
-    secure: Number(process.env.SMTP_PORT || 465) === 465,
-    auth: {
-      user,
-      pass: password,
-    },
-  });
+  if (!to) {
+    throw new Error("INQUIRY_TO_EMAIL is not configured.");
+  }
 
-  const details = [
-    ["Inquiry ID", inquiry.id],
-    ["Name", inquiry.name],
-    ["Customer Email", inquiry.email],
-    ["Company", inquiry.company || "Not provided"],
-    ["Service", readable(inquiry.service)],
-    ["Features", inquiry.features.join(", ") || "None selected"],
-    ["Budget", readable(inquiry.budget)],
-    ["Timeline", readable(inquiry.timeline)],
-    ["Description", inquiry.description || "Not provided"],
-    ["Submitted At", new Date(inquiry.createdAt).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-    })],
-  ] as const;
+  const resend = new Resend(apiKey);
 
-  const htmlRows = details
-    .map(
-      ([label, value]) => `
-        <tr>
-          <td style="padding:10px;border:1px solid #ddd;font-weight:bold">
-            ${escapeHtml(label)}
-          </td>
-          <td style="padding:10px;border:1px solid #ddd">
-            ${escapeHtml(String(value))}
-          </td>
-        </tr>
-      `
-    )
-    .join("");
+  const date = inquiry.createdAt
+    ? new Date(inquiry.createdAt).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+      })
+    : "Not available";
 
-  await transporter.sendMail({
-    from: `"ShyGrow Website" <${user}>`,
-    to: recipient,
+  const features = inquiry.features.length
+    ? inquiry.features
+        .map((feature) => `<li>${escapeHtml(feature)}</li>`)
+        .join("")
+    : "<li>None selected</li>";
+
+  const description = escapeHtml(
+    inquiry.description || "No description provided"
+  ).replace(/\n/g, "<br />");
+
+  const { data, error } = await resend.emails.send({
+    from: `ShyGrow <${from}>`,
+    to: [to],
     replyTo: inquiry.email,
-    subject: `New ShyGrow Project Inquiry — ${inquiry.name}`,
-    text: details.map(([label, value]) => `${label}: ${value}`).join("\n"),
+    subject: `New Project Inquiry — ${inquiry.name}`,
     html: `
-      <div style="font-family:Arial,sans-serif;color:#222">
-        <h2>New Project Inquiry — ShyGrow</h2>
+      <div style="font-family:Arial,sans-serif;max-width:650px;margin:auto;color:#222">
+        <h1 style="color:#6d28d9">New ShyGrow Project Inquiry</h1>
         <p>A customer has submitted the Project Planner form.</p>
-        <table style="border-collapse:collapse;width:100%;max-width:750px">
-          ${htmlRows}
-        </table>
-        <p style="margin-top:20px">
-          Reply directly to this email to respond to the customer.
-        </p>
+
+        <h2>Customer Details</h2>
+        <p><strong>Name:</strong> ${escapeHtml(inquiry.name)}</p>
+        <p><strong>Email:</strong> ${escapeHtml(inquiry.email)}</p>
+        <p><strong>Company:</strong> ${escapeHtml(inquiry.company || "Not provided")}</p>
+
+        <h2>Project Details</h2>
+        <p><strong>Service:</strong> ${escapeHtml(inquiry.service)}</p>
+        <p><strong>Budget:</strong> ${escapeHtml(inquiry.budget)}</p>
+        <p><strong>Timeline:</strong> ${escapeHtml(inquiry.timeline)}</p>
+        <p><strong>Features:</strong></p>
+        <ul>${features}</ul>
+
+        <p><strong>Description:</strong></p>
+        <p>${description}</p>
+
+        <hr />
+        <p><strong>Inquiry ID:</strong> ${escapeHtml(inquiry.id)}</p>
+        <p><strong>Submitted:</strong> ${escapeHtml(date)}</p>
+        <p style="color:#666">ShyGrow — New project notification</p>
       </div>
     `,
   });
+
+  if (error) {
+    throw new Error(`Resend email failed: ${error.message}`);
+  }
+
+  return data;
 }
