@@ -33,7 +33,13 @@ function cleanText(value: unknown, maxLength: number): string {
   return value.trim().slice(0, maxLength);
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
 export async function POST(request: NextRequest) {
+  let stage = "Parsing request";
+
   try {
     const body: unknown = await request.json();
 
@@ -63,10 +69,7 @@ export async function POST(request: NextRequest) {
 
     if (name.length < 2) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Please enter your name.",
-        },
+        { success: false, message: "Please enter your name." },
         { status: 400 }
       );
     }
@@ -75,40 +78,28 @@ export async function POST(request: NextRequest) {
 
     if (!emailPattern.test(email)) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Please enter a valid email address.",
-        },
+        { success: false, message: "Please enter a valid email address." },
         { status: 400 }
       );
     }
 
     if (!allowedServices.includes(service)) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Please select a valid service.",
-        },
+        { success: false, message: "Please select a valid service." },
         { status: 400 }
       );
     }
 
     if (!allowedBudgets.includes(budget)) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Please select a valid budget.",
-        },
+        { success: false, message: "Please select a valid budget." },
         { status: 400 }
       );
     }
 
     if (!allowedTimelines.includes(timeline)) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Please select a valid timeline.",
-        },
+        { success: false, message: "Please select a valid timeline." },
         { status: 400 }
       );
     }
@@ -126,24 +117,22 @@ export async function POST(request: NextRequest) {
       )
     ) {
       return NextResponse.json(
-        {
-          success: false,
-          message: "Invalid selected features.",
-        },
+        { success: false, message: "Invalid selected features." },
         { status: 400 }
       );
     }
 
-    // Explicit string[] typing fixes the TypeScript build error.
     const features: string[] = Array.from(
-      new Set<string>(
+      new Set(
         (rawFeatures as string[]).map((feature) => feature.trim())
       )
     );
 
+    stage = "Connecting to MongoDB";
     await connectDB();
 
-    // Save the inquiry first so SMTP failure does not lose it.
+    stage = "Saving inquiry to MongoDB";
+
     const inquiry = await Inquiry.create({
       name,
       email,
@@ -157,6 +146,8 @@ export async function POST(request: NextRequest) {
     });
 
     try {
+      stage = "Sending inquiry notification";
+
       await sendInquiryNotification({
         id: inquiry._id.toString(),
         name,
@@ -169,6 +160,8 @@ export async function POST(request: NextRequest) {
         description,
         createdAt: inquiry.createdAt,
       });
+
+      stage = "Saving successful email status";
 
       inquiry.emailStatus = "sent";
       await inquiry.save();
@@ -183,38 +176,40 @@ export async function POST(request: NextRequest) {
         { status: 201 }
       );
     } catch (emailError) {
-      // The database record remains saved if email delivery fails.
-      inquiry.emailStatus = "failed";
-      inquiry.emailError =
-        emailError instanceof Error
-          ? emailError.message.slice(0, 500)
-          : "Unknown email error";
+      console.error("ShyGrow inquiry email/status update failed:", {
+        inquiryId: inquiry._id.toString(),
+        message: getErrorMessage(emailError),
+      });
 
-      await inquiry.save();
-
-      console.error(
-        "ShyGrow inquiry email failed:",
-        emailError instanceof Error
-          ? emailError.message
-          : "Unknown error"
-      );
+      // Keep the original inquiry saved, even if email delivery fails.
+      try {
+        inquiry.emailStatus = "failed";
+        inquiry.emailError = getErrorMessage(emailError).slice(0, 500);
+        await inquiry.save();
+      } catch (statusError) {
+        console.error("ShyGrow email status save failed:", {
+          inquiryId: inquiry._id.toString(),
+          message: getErrorMessage(statusError),
+        });
+      }
 
       return NextResponse.json(
         {
           success: true,
           emailSent: false,
           message:
-            "Your inquiry was saved, but the email notification could not be sent. We will need to retry the notification.",
+            "Your inquiry was saved, but the email notification could not be sent.",
           inquiryId: inquiry._id.toString(),
         },
         { status: 201 }
       );
     }
   } catch (error) {
-    console.error(
-      "ShyGrow inquiry API error:",
-      error instanceof Error ? error.message : "Unknown error"
-    );
+    console.error("ShyGrow inquiry API failed:", {
+      stage,
+      message: getErrorMessage(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
 
     return NextResponse.json(
       {
